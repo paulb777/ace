@@ -3785,6 +3785,9 @@ Setting.prototype = {
      */
     resetValue: function() {
         this.set(this.defaultValue);
+    },
+    toString: function () {
+        return this.name;
     }
 };
 oop.implement(Setting.prototype, EventEmitter);
@@ -5070,6 +5073,7 @@ exports.scrollbarWidth = function() {
 
     var inner = exports.createElement("p");
     inner.style.width = "100%";
+    inner.style.minWidth = "0px";
     inner.style.height = "200px";
 
     var outer = exports.createElement("div");
@@ -5079,6 +5083,7 @@ exports.scrollbarWidth = function() {
     style.left = "-10000px";
     style.overflow = "hidden";
     style.width = "200px";
+    style.minWidth = "0px";
     style.height = "150px";
 
     outer.appendChild(inner);
@@ -5746,6 +5751,10 @@ var Editor =function(renderer, session) {
         }
         this.textInput.focus();
     };
+    
+    this.isFocused = function() {
+        return this.textInput.isFocused();
+    };
 
     this.blur = function() {
         this.textInput.blur();
@@ -5814,7 +5823,7 @@ var Editor =function(renderer, session) {
             } else {
                 range = new Range(cursor.row, 0, cursor.row+1, 0);
             }
-            session.$highlightLineMarker = session.addMarker(range, "ace_active_line", "line");
+            session.$highlightLineMarker = session.addMarker(range, "ace_active_line", "background");
         }
     };
 
@@ -5901,14 +5910,14 @@ var Editor =function(renderer, session) {
         var mode = session.getMode();
 
         var cursor = this.getCursorPosition();
-        
+
         if (this.getBehavioursEnabled()) {
             // Get a transform if the current mode wants one.
             var transform = mode.transformAction(session.getState(cursor.row), 'insertion', this, session, text);
             if (transform)
                 text = transform.text;
         }
-        
+
         text = text.replace("\t", this.session.getTabString());
 
         // remove selected text
@@ -5924,13 +5933,13 @@ var Editor =function(renderer, session) {
 
         this.clearSelection();
 
-        var start         = cursor.column;
-        var lineState     = session.getState(cursor.row);
+        var start = cursor.column;
+        var lineState = session.getState(cursor.row);
         var shouldOutdent = mode.checkOutdent(lineState, session.getLine(cursor.row), text);
-        var line          = session.getLine(cursor.row);
-        var lineIndent    = mode.getNextLineIndent(lineState, line.slice(0, cursor.column), session.getTabString());
-        var end           = session.insert(cursor, text);
-        
+        var line = session.getLine(cursor.row);
+        var lineIndent = mode.getNextLineIndent(lineState, line.slice(0, cursor.column), session.getTabString());
+        var end = session.insert(cursor, text);
+
         if (transform && transform.selection) {
             if (transform.selection.length == 2) { // Transform relative to the current column
                 this.selection.setSelectionRange(
@@ -5944,7 +5953,7 @@ var Editor =function(renderer, session) {
                               transform.selection[3]));
             }
         }
-        
+
         var lineState = session.getState(cursor.row);
 
         // TODO disabled multiline auto indent
@@ -5990,8 +5999,27 @@ var Editor =function(renderer, session) {
         }
     };
 
-    this.onTextInput = function(text) {
-        this.keyBinding.onTextInput(text);
+    this.onTextInput = function(text, notPasted) {
+        // In case the text was not pasted and we got only one character, then
+        // handel it as a command key stroke.
+        if (notPasted && text.length == 1) {
+            // Note: The `null` as `keyCode` is important here, as there are
+            // some checks in the code for `keyCode == 0` meaning the text comes
+            // from the keyBinding.onTextInput code path.
+            var handled = this.keyBinding.onCommandKey({}, 0, null, text);
+
+            // Check if the text was handled. If not, then handled it as "normal"
+            // text and insert it to the editor directly. This shouldn't be done
+            // using the this.keyBinding.onTextInput(text) function, as it would
+            // make the `text` get sent to the keyboardHandler twice, which might
+            // turn out to be a bad thing in case there is a custome keyboard
+            // handler like the StateHandler.
+            if (!handled) {
+                this.insert(text);
+            }
+        } else {
+            this.keyBinding.onTextInput(text);
+        }
     };
 
     this.onCommandKey = function(e, hashId, keyCode) {
@@ -6094,12 +6122,12 @@ var Editor =function(renderer, session) {
     this.getReadOnly = function() {
         return this.$readOnly;
     };
-    
+
     this.$modeBehaviours = false;
     this.setBehavioursEnabled = function (enabled) {
         this.$modeBehaviours = enabled;
     }
-    
+
     this.getBehavioursEnabled = function () {
         return this.$modeBehaviours;
     }
@@ -6121,7 +6149,7 @@ var Editor =function(renderer, session) {
 
         if (this.selection.isEmpty())
             this.selection.selectLeft();
-        
+
         var range = this.getSelectionRange();
         if (this.getBehavioursEnabled()) {
             var session = this.session;
@@ -6721,6 +6749,7 @@ var TextInput = function(parentNode, host) {
 
     var inCompostion = false;
     var copied = false;
+    var pasted = false;
     var tempStyle = '';
 
     function sendText(valueToSend) {
@@ -6731,15 +6760,18 @@ var TextInput = function(parentNode, host) {
                     value = value.slice(0, -1);
                     if (value)
                         host.onTextInput(value);
-                } else
+                } else {
                     host.onTextInput(value);
+                }
 
                 // If editor is no longer focused we quit immediately, since
                 // it means that something else like CLI is in charge now.
                 if (!isFocused()) return false;
             }
         }
+
         copied = false;
+        pasted = false;
 
         // Safari doesn't fire copy events if no text is selected
         text.value = PLACEHOLDER;
@@ -6824,6 +6856,8 @@ var TextInput = function(parentNode, host) {
     };
     event.addListener(text, "textInput", onTextInput);
     event.addListener(text, "paste", function(e) {
+        // Mark that the next input text comes from past.
+        pasted = true;
         // Some browsers support the event.clipboardData API. Use this to get
         // the pasted content which increases speed if pasting a lot of lines.
         if (e.clipboardData && e.clipboardData.getData) {
@@ -6841,7 +6875,7 @@ var TextInput = function(parentNode, host) {
     };
 
     if (useragent.isIE) {
-        event.addListener(text, "beforecopy", function(e) {        
+        event.addListener(text, "beforecopy", function(e) {
             var copyText = host.getCopyText();
             if(copyText)
                 clipboardData.setData("Text", copyText);
@@ -6965,10 +6999,11 @@ exports.TextInput = TextInput;
  *
  * ***** END LICENSE BLOCK ***** */
 
-define('ace/mouse_handler', ['require', 'exports', 'module' , 'pilot/event', 'pilot/dom'], function(require, exports, module) {
+define('ace/mouse_handler', ['require', 'exports', 'module' , 'pilot/event', 'pilot/dom', 'pilot/browser_focus'], function(require, exports, module) {
 
 var event = require("pilot/event");
 var dom = require("pilot/dom");
+var BrowserFocus = require("pilot/browser_focus").BrowserFocus;
 
 var STATE_UNKNOWN = 0;
 var STATE_SELECT = 1;
@@ -6979,6 +7014,8 @@ var DRAG_OFFSET = 5; // pixels
 
 var MouseHandler = function(editor) {
     this.editor = editor;
+    
+    this.browserFocus = new BrowserFocus();
     event.addListener(editor.container, "mousedown", function(e) {
         editor.focus();
         return event.preventDefault(e);
@@ -7019,6 +7056,15 @@ var MouseHandler = function(editor) {
     };
 
     this.onMouseDown = function(e) {
+        // if this click caused the editor to be focused ignore the click
+        // for selection and cursor placement
+        if (
+            !this.browserFocus.isFocused()
+            || new Date().getTime() - this.browserFocus.lastFocus < 20
+            || !this.editor.isFocused()
+        )
+            return;
+        
         var pageX = event.getDocumentX(e);
         var pageY = event.getDocumentY(e);
         var pos = this.$getEventPosition(e);
@@ -7228,6 +7274,97 @@ var MouseHandler = function(editor) {
 
 exports.MouseHandler = MouseHandler;
 });
+/* vim:ts=4:sts=4:sw=4:
+ * ***** BEGIN LICENSE BLOCK *****
+ * Version: MPL 1.1/GPL 2.0/LGPL 2.1
+ *
+ * The contents of this file are subject to the Mozilla Public License Version
+ * 1.1 (the "License"); you may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at
+ * http://www.mozilla.org/MPL/
+ *
+ * Software distributed under the License is distributed on an "AS IS" basis,
+ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
+ * for the specific language governing rights and limitations under the
+ * License.
+ *
+ * The Original Code is Ajax.org Code Editor (ACE).
+ *
+ * The Initial Developer of the Original Code is
+ * Ajax.org B.V.
+ * Portions created by the Initial Developer are Copyright (C) 2010
+ * the Initial Developer. All Rights Reserved.
+ *
+ * Contributor(s):
+ *      Fabian Jakobs <fabian AT ajax DOT org>
+ *      Irakli Gozalishvili <rfobic@gmail.com> (http://jeditoolkit.com)
+ *      Julian Viereck <julian.viereck@gmail.com>
+ *
+ * Alternatively, the contents of this file may be used under the terms of
+ * either the GNU General Public License Version 2 or later (the "GPL"), or
+ * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
+ * in which case the provisions of the GPL or the LGPL are applicable instead
+ * of those above. If you wish to allow use of your version of this file only
+ * under the terms of either the GPL or the LGPL, and not to allow others to
+ * use your version of this file under the terms of the MPL, indicate your
+ * decision by deleting the provisions above and replace them with the notice
+ * and other provisions required by the GPL or the LGPL. If you do not delete
+ * the provisions above, a recipient may use your version of this file under
+ * the terms of any one of the MPL, the GPL or the LGPL.
+ *
+ * ***** END LICENSE BLOCK ***** */
+
+define('pilot/browser_focus', ['require', 'exports', 'module' , 'pilot/oop', 'pilot/event', 'pilot/event_emitter'], function(require, exports, module) {
+
+var oop = require("pilot/oop");
+var event = require("pilot/event");
+var EventEmitter = require("pilot/event_emitter").EventEmitter;
+
+/**
+ * This class keeps track of the focus state of the given window.
+ * Focus changes for example when the user switches a browser tab,
+ * goes to the location bar or switches to another application.
+ */ 
+var BrowserFocus = function(win) {
+    win = win || window;
+    
+    this.lastFocus = new Date().getTime();
+    this._isFocused = true;
+    
+    var _self = this;
+    event.addListener(win, "blur", function(e) {
+        _self._setFocused(false);
+    });
+
+    event.addListener(win, "focus", function(e) {
+        _self._setFocused(true);
+    });
+};
+
+(function(){
+
+    oop.implement(this, EventEmitter);
+    
+    this.isFocused = function() {
+        return this._isFocused;
+    };
+    
+    this._setFocused = function(isFocused) {
+        if (this._isFocused == isFocused)
+            return;
+            
+        if (isFocused)
+            this.lastFocus = new Date().getTime();
+            
+        this._isFocused = isFocused;
+        this._emit("changeFocus");
+    };
+
+}).call(BrowserFocus.prototype);
+
+
+exports.BrowserFocus = BrowserFocus;
+});
 /* ***** BEGIN LICENSE BLOCK *****
  * Version: MPL 1.1/GPL 2.0/LGPL 2.1
  *
@@ -7318,22 +7455,27 @@ var KeyBinding = function(editor) {
             }
         }
 
+        var success = false;
         if (toExecute) {
-            var success = canon.exec(toExecute.command,
+            success = canon.exec(toExecute.command,
                                         env, "editor", toExecute.args);
             if (success) {
-                return event.stopEvent(e);
+                event.stopEvent(e);
             }
         }
+        return success;
     };
 
-    this.onCommandKey = function(e, hashId, keyCode) {
-        var keyString = keyUtil.keyCodeToString(keyCode);
-        this.$callKeyboardHandler(e, hashId, keyString, keyCode);
+    this.onCommandKey = function(e, hashId, keyCode, keyString) {
+        // In case there is no keyString, try to interprete the keyCode.
+        if (!keyString) {
+            keyString = keyUtil.keyCodeToString(keyCode);
+        }
+        return this.$callKeyboardHandler(e, hashId, keyString, keyCode);
     };
 
     this.onTextInput = function(text) {
-        this.$callKeyboardHandler({}, 0, text, 0);
+        return this.$callKeyboardHandler({}, 0, text, 0);
     }
 
 }).call(KeyBinding.prototype);
@@ -7765,7 +7907,6 @@ var EditSession = function(text, mode) {
     this.$backMarkers = {};
     this.$markerId = 1;
     this.$rowCache = [];
-    this.$rowCacheSize = 1000;
     this.$wrapData = [];
     this.$foldData = [];
     this.$foldData.toString = function() {
@@ -7775,7 +7916,6 @@ var EditSession = function(text, mode) {
         });
         return str;
     }
-    this.$docChangeCounter = 0;
 
     if (text instanceof Document) {
         this.setDocument(text);
@@ -7801,17 +7941,11 @@ var EditSession = function(text, mode) {
 
         this.doc = doc;
         doc.on("change", this.onChange.bind(this));
-        doc.on("changeStart", this.onChangeStart.bind(this));
-        doc.on("changeEnd",   this.onChangeEnd.bind(this));
         this.on("changeFold", this.onChangeFold.bind(this));
     };
 
     this.getDocument = function() {
         return this.doc;
-    };
-
-    this.onChangeStart = function() {
-        this.$docChangeCounter ++;
     };
 
     this.$resetRowCache = function(row) {
@@ -7825,29 +7959,6 @@ var EditSession = function(text, mode) {
                 rowCache.splice(i, rowCache.length);
                 return;
             }
-        }
-    }
-
-    this.onChangeEnd = function() {
-        this.$docChangeCounter --;
-        if (this.$docChangeCounter == 0
-            && !this.$fromUndo && this.$undoManager)
-        {
-            if (this.$deltasFold.length) {
-                this.$deltas.push({
-                    group: "fold",
-                    deltas: this.$deltasFold
-                });
-                this.$deltasFold = [];
-            }
-            if (this.$deltasDoc) {
-                this.$deltas.push({
-                    group: "doc",
-                    deltas: this.$deltasDoc
-                });
-                this.$deltasDoc = [];
-            }
-            this.$informUndoManager.schedule();
         }
     };
 
@@ -7871,6 +7982,8 @@ var EditSession = function(text, mode) {
                     folds:  removedFolds
                 });
             }
+            
+            this.$informUndoManager.schedule();
         }
 
         this.bgTokenizer.start(delta.range.start.row);
@@ -7879,6 +7992,9 @@ var EditSession = function(text, mode) {
 
     this.setValue = function(text) {
         this.doc.setValue(text);
+        this.selection.moveCursorTo(0, 0);
+        this.selection.clearSelection();
+        
         this.$resetRowCache(0);
         this.$deltas = [];
         this.$deltasDoc = [];
@@ -7910,19 +8026,37 @@ var EditSession = function(text, mode) {
         this.$deltasDoc = [];
         this.$deltasFold = [];
 
-        if (this.$informUndoManager) {
+        if (this.$informUndoManager)
             this.$informUndoManager.cancel();
-        }
 
         if (undoManager) {
             var self = this;
             this.$syncInformUndoManager = function() {
                 self.$informUndoManager.cancel();
-                if (self.$deltas.length > 0)
-                    undoManager.execute({
-                        action : "aceupdate",
-                        args   : [self.$deltas, self]
+                
+                if (self.$deltasFold.length) {
+                    self.$deltas.push({
+                        group: "fold",
+                        deltas: self.$deltasFold
                     });
+                    self.$deltasFold = [];
+                }
+                
+                if (self.$deltasDoc.length) {
+                    self.$deltas.push({
+                        group: "doc",
+                        deltas: self.$deltasDoc
+                    });
+                    self.$deltasDoc = [];
+                }
+                
+                if (self.$deltas.length > 0) {
+                    undoManager.execute({
+                        action: "aceupdate",
+                        args: [self.$deltas, self]
+                    });
+                }
+                
                 self.$deltas = [];
             }
             this.$informUndoManager =
@@ -9061,6 +9195,9 @@ var EditSession = function(text, mode) {
         return [screenColumn, column];
     }
 
+    /**
+     * Returns the number of rows required to render this row on the screen
+     */
     this.getRowLength = function(row) {
         if (!this.$useWrapMode || !this.$wrapData[row]) {
             return 1;
@@ -9069,15 +9206,16 @@ var EditSession = function(text, mode) {
         }
     }
 
+    /**
+     * Returns the height in pixels required to render this row on the screen
+     **/
     this.getRowHeight = function(config, row) {
         return this.getRowLength(row) * config.lineHeight;
     }
 
     this.getScreenLastRowColumn = function(screenRow) {
-        // Note: This won't work if someone has more then
-        // 1.7976931348623158e+307 characters in one row. But I think we can
-        // live with this limitation ;)
-        return this.screenToDocumentColumn(screenRow, Number.MAX_VALUE / 10)
+        //return this.screenToDocumentColumn(screenRow, Number.MAX_VALUE / 10)
+        return this.documentToScreenColumn(screenRow, this.doc.getLine(screenRow).length);
     };
 
     this.getDocumentLastRowColumn = function(docRow, docColumn) {
@@ -9114,6 +9252,13 @@ var EditSession = function(text, mode) {
     };
 
     this.screenToDocumentPosition = function(screenRow, screenColumn) {
+        if (screenRow < 0) {
+            return {
+                row: 0,
+                column: 0
+            }
+        }
+        
         var line;
         var docRow = 0;
         var docColumn = 0;
@@ -9121,44 +9266,43 @@ var EditSession = function(text, mode) {
         var foldLineRowLength;
         var row = 0;
         var rowLength = 0;
-        var splits = null;
 
         var rowCache = this.$rowCache;
-        var doCache = !rowCache.length;
         for (var i = 0; i < rowCache.length; i++) {
             if (rowCache[i].screenRow < screenRow) {
                 row = rowCache[i].screenRow;
                 docRow = rowCache[i].docRow;
-                doCache = i == rowCache.length - 1;
+            }
+            else {
+                break;
             }
         }
-        var docRowCacheLast = docRow;
+        var doCache = !rowCache.length || i == rowCache.length;
+        
         // clamp row before clamping column, for selection on last line
         var maxRow = this.getLength() - 1;
 
         var foldLine = this.getNextFold(docRow);
-        var foldStart = foldLine ?foldLine.start.row :Infinity;
+        var foldStart = foldLine ? foldLine.start.row : Infinity;
 
         while (row <= screenRow) {
-            if (doCache
-                && docRow - docRowCacheLast > this.$rowCacheSize) {
-                rowCache.push({
-                    docRow: docRow,
-                    screenRow: row
-                });
-                docRowCacheLast = docRow;
-            }
             rowLength = this.getRowLength(docRow);
             if (row + rowLength - 1 >= screenRow || docRow >= maxRow) {
                 break;
             } else {
                 row += rowLength;
                 docRow++;
-                if(docRow > foldStart) {
+                if (docRow > foldStart) {
                     docRow = foldLine.end.row+1;
                     foldLine = this.getNextFold(docRow);
-                    foldStart = foldLine ?foldLine.start.row :Infinity;
+                    foldStart = foldLine ? foldLine.start.row : Infinity;
                 }
+            }
+            if (doCache) {
+                rowCache.push({
+                    docRow: docRow,
+                    screenRow: row
+                });
             }
         }
 
@@ -9169,6 +9313,7 @@ var EditSession = function(text, mode) {
             foldLine = null;
         }
 
+        var splits = [];
         if (this.$useWrapMode) {
             splits = this.$wrapData[docRow];
             if (splits) {
@@ -9181,6 +9326,10 @@ var EditSession = function(text, mode) {
         }
 
         docColumn += this.$getStringScreenWidth(line, screenColumn)[1];
+
+        // clip row at the end of the documen
+        if (row + splits.length < screenRow)
+            docColumn = Number.MAX_VALUE;
 
         // Need to do some clamping action here.
         if (this.$useWrapMode) {
@@ -9239,16 +9388,16 @@ var EditSession = function(text, mode) {
 
         var rowEnd, row = 0;
         var rowCache = this.$rowCache;
-        //
-        var doCache = !rowCache.length;
+
         for (var i = 0; i < rowCache.length; i++) {
             if (rowCache[i].docRow < docRow) {
                 screenRow = rowCache[i].screenRow;
                 row = rowCache[i].docRow;
-                doCache = i == rowCache.length - 1;
+            } else {
+                break;
             }
         }
-        var docRowCacheLast = row;
+        var doCache = !rowCache.length || i == rowCache.length;
 
         var foldLine = this.getNextFold(row);
         var foldStart = foldLine ?foldLine.start.row :Infinity;
@@ -9260,20 +9409,20 @@ var EditSession = function(text, mode) {
                     break;
                 foldLine = this.getNextFold(rowEnd);
                 foldStart = foldLine ?foldLine.start.row :Infinity;
-            } else {
-                rowEnd = row + 1;
             }
-            if (doCache
-                && row - docRowCacheLast > this.$rowCacheSize) {
-                rowCache.push({
-                    docRow: row,
-                    screenRow: screenRow
-                });
-                docRowCacheLast = row;
+            else {
+                rowEnd = row + 1;
             }
 
             screenRow += this.getRowLength(row);
             row = rowEnd;
+                        
+            if (doCache) {
+                rowCache.push({
+                    docRow: row,
+                    screenRow: screenRow
+                });
+            }
         }
 
         // Calculate the text line that is displayed in docRow on the screen.
@@ -9295,7 +9444,8 @@ var EditSession = function(text, mode) {
                 screenRowOffset++;
             }
             textLine = textLine.substring(
-                wrapRow[screenRowOffset - 1] || 0,  textLine.length);
+                wrapRow[screenRowOffset - 1] || 0, textLine.length
+            );
         }
 
         return {
@@ -9429,6 +9579,13 @@ var lang = require("pilot/lang");
 var EventEmitter = require("pilot/event_emitter").EventEmitter;
 var Range = require("ace/range").Range;
 
+/**
+ * Keeps cursor position and the text selection of an edit session.
+ * 
+ * The row/columns used in the selection are in document coordinates
+ * representing ths coordinates as thez appear in the document
+ * before applying soft wrap and folding.
+ */ 
 var Selection = function(session) {
     this.session = session;
     this.doc = session.getDocument();
@@ -9442,7 +9599,7 @@ var Selection = function(session) {
         _self._dispatchEvent("changeCursor");
         if (!_self.$isEmpty)
             _self._dispatchEvent("changeSelection");
-        if (e.old.row == e.value.row)
+        if (!_self.$preventUpdateDesiredColumnOnChange && e.old.column != e.value.column)
             _self.$updateDesiredColumn();
     });
 
@@ -9683,7 +9840,8 @@ var Selection = function(session) {
             fold;
         if (fold = this.session.getFoldAt(cursor.row, cursor.column, 1)) {
             this.moveCursorTo(fold.end.row, fold.end.column);
-        } else if (this.selectionLead.column == this.doc.getLine(this.selectionLead.row).length) {
+        }
+        else if (this.selectionLead.column == this.doc.getLine(this.selectionLead.row).length) {
             if (this.selectionLead.row < this.doc.getLength() - 1) {
                 this.moveCursorTo(this.selectionLead.row + 1, 0);
             }
@@ -9704,25 +9862,25 @@ var Selection = function(session) {
         var screenRow = this.session.documentToScreenRow(row, column);
 
         // Determ the doc-position of the first character at the screen line.
-        var firstColumnPosition =
-            this.session.screenToDocumentPosition(screenRow, 0);
+        var firstColumnPosition = this.session.screenToDocumentPosition(screenRow, 0);
 
-        // Determ the string "before" the cursor.
+        // Determ the line
         var beforeCursor = this.session.getDisplayLine(
-                row, column,
-                firstColumnPosition.row, firstColumnPosition.column);
+            row, null,
+            firstColumnPosition.row, firstColumnPosition.column
+        );
 
-        //
         var leadingSpace = beforeCursor.match(/^\s*/);
-        if (leadingSpace[0].length == 0
-            || leadingSpace[0].length >= column - firstColumnPosition.column)
-        {
+        if (leadingSpace[0].length == column) {
             this.moveCursorTo(
-                firstColumnPosition.row, firstColumnPosition.column);
-        } else {
+                firstColumnPosition.row, firstColumnPosition.column
+            );
+        }
+        else {
             this.moveCursorTo(
                 firstColumnPosition.row,
-                firstColumnPosition.column + leadingSpace[0].length);
+                firstColumnPosition.column + leadingSpace[0].length
+            );
         }
     };
 
@@ -9820,7 +9978,6 @@ var Selection = function(session) {
         );
         var screenCol = (chars == 0 && this.$desiredColumn) || screenPos.column;
         var docPos = this.session.screenToDocumentPosition(screenPos.row + rows, screenCol);
-
         this.moveCursorTo(docPos.row, docPos.column + chars, chars == 0);
     };
 
@@ -9835,7 +9992,11 @@ var Selection = function(session) {
             row = fold.start.row;
             column = fold.start.column;
         }
+        
+        this.$preventUpdateDesiredColumnOnChange = true;
         this.selectionLead.setPosition(row, column);
+        this.$preventUpdateDesiredColumnOnChange = false;
+        
         if (!preventUpdateDesiredColumn)
             this.$updateDesiredColumn(this.selectionLead.column);
     };
@@ -10143,6 +10304,7 @@ var Range = function(startRow, startColumn, endRow, endColumn) {
             session.documentToScreenPosition(this.start);
         var screenPosEnd =
             session.documentToScreenPosition(this.end);
+
         return new Range(
             screenPosStart.row, screenPosStart.column,
             screenPosEnd.row, screenPosEnd.column
@@ -10919,14 +11081,12 @@ var Document = function(text) {
         var firstLine = lines.splice(0, 1)[0];
         var lastLine = lines.length == 0 ? null : lines.splice(lines.length - 1, 1)[0];
 
-        this._dispatchEvent("changeStart");
         position = this.insertInLine(position, firstLine);
         if (lastLine !== null) {
             position = this.insertNewLine(position); // terminate first line
             position = this.insertLines(position.row, lines);
             position = this.insertInLine(position, lastLine || "");
         }
-        this._dispatchEvent("changeEnd");
         return position;
     };
 
@@ -10938,7 +11098,6 @@ var Document = function(text) {
         args.push.apply(args, lines);
         this.$lines.splice.apply(this.$lines, args);
 
-        this._dispatchEvent("changeStart");
         var range = new Range(row, 0, row + lines.length, 0);
         var delta = {
             action: "insertLines",
@@ -10946,7 +11105,6 @@ var Document = function(text) {
             lines: lines
         };
         this._dispatchEvent("change", { data: delta });
-        this._dispatchEvent("changeEnd");
         return range.end;
     },
 
@@ -10954,7 +11112,6 @@ var Document = function(text) {
         position = this.$clipPosition(position);
         var line = this.$lines[position.row] || "";
 
-        this._dispatchEvent("changeStart");
         this.$lines[position.row] = line.substring(0, position.column);
         this.$lines.splice(position.row + 1, 0, line.substring(position.column, line.length));
 
@@ -10969,7 +11126,6 @@ var Document = function(text) {
             text: this.getNewLineCharacter()
         };
         this._dispatchEvent("change", { data: delta });
-        this._dispatchEvent("changeEnd");
 
         return end;
     };
@@ -10980,7 +11136,6 @@ var Document = function(text) {
 
         var line = this.$lines[position.row] || "";
 
-        this._dispatchEvent("changeStart");
         this.$lines[position.row] = line.substring(0, position.column) + text
                 + line.substring(position.column);
 
@@ -10995,7 +11150,6 @@ var Document = function(text) {
             text: text
         };
         this._dispatchEvent("change", { data: delta });
-        this._dispatchEvent("changeEnd");
 
         return end;
     };
@@ -11011,7 +11165,6 @@ var Document = function(text) {
         var firstRow = range.start.row;
         var lastRow = range.end.row;
 
-        this._dispatchEvent("changeStart");
         if (range.isMultiLine()) {
             var firstFullRow = range.start.column == 0 ? firstRow : firstRow + 1;
             var lastFullRow = lastRow - 1;
@@ -11030,7 +11183,6 @@ var Document = function(text) {
         else {
             this.removeInLine(firstRow, range.start.column, range.end.column);
         }
-        this._dispatchEvent("changeEnd");
         return range.start;
     };
 
@@ -11042,7 +11194,6 @@ var Document = function(text) {
         var line = this.getLine(row);
         var removed = line.substring(startColumn, endColumn);
         var newLine = line.substring(0, startColumn) + line.substring(endColumn, line.length);
-        this._dispatchEvent("changeStart");
         this.$lines.splice(row, 1, newLine);
 
         var delta = {
@@ -11051,7 +11202,6 @@ var Document = function(text) {
             text: removed
         };
         this._dispatchEvent("change", { data: delta });
-        this._dispatchEvent("changeEnd");
         return range.start;
     };
 
@@ -11063,7 +11213,6 @@ var Document = function(text) {
      * @return {String[]} The removed lines
      */
     this.removeLines = function(firstRow, lastRow) {
-        this._dispatchEvent("changeStart");
         var range = new Range(firstRow, 0, lastRow + 1, 0);
         var removed = this.$lines.splice(firstRow, lastRow - firstRow + 1);
 
@@ -11074,7 +11223,6 @@ var Document = function(text) {
             lines: removed
         };
         this._dispatchEvent("change", { data: delta });
-        this._dispatchEvent("changeEnd");
         return removed;
     };
 
@@ -11085,7 +11233,6 @@ var Document = function(text) {
         var range = new Range(row, firstLine.length, row+1, 0);
         var line = firstLine + secondLine;
 
-        this._dispatchEvent("changeStart");
         this.$lines.splice(row, 2, line);
 
         var delta = {
@@ -11094,7 +11241,6 @@ var Document = function(text) {
             text: this.getNewLineCharacter()
         };
         this._dispatchEvent("change", { data: delta });
-        this._dispatchEvent("changeEnd");
     };
 
     this.replace = function(range, text) {
@@ -11106,7 +11252,6 @@ var Document = function(text) {
         if (text == this.getTextRange(range))
             return range.end;
 
-        this._dispatchEvent("changeStart");
         this.remove(range);
         if (text) {
             var end = this.insert(range.start, text);
@@ -11114,7 +11259,6 @@ var Document = function(text) {
         else {
             end = range.start;
         }
-        this._dispatchEvent("changeEnd");
 
         return end;
     };
@@ -11560,44 +11704,11 @@ exports.BackgroundTokenizer = BackgroundTokenizer;
  *
  * ***** END LICENSE BLOCK ***** */
 
-define('ace/edit_session/folding', ['require', 'exports', 'module' , 'ace/range', 'ace/edit_session/fold_line'], function(require, exports, module) {
+define('ace/edit_session/folding', ['require', 'exports', 'module' , 'ace/range', 'ace/edit_session/fold_line', 'ace/edit_session/fold'], function(require, exports, module) {
 
 var Range = require("ace/range").Range;
 var FoldLine = require("ace/edit_session/fold_line").FoldLine;
-
-/**
- * Simple fold-data struct.
- **/
-function Fold(range, placeholder) {
-    this.foldLine = null;
-    this.placeholder = placeholder;
-    this.range = range;
-    this.start = range.start;
-    this.end = range.end;
-
-    this.sameRow = range.start.row == range.end.row;
-    this.subFolds = [];
-}
-
-Fold.prototype.toString = function() {
-    return '"' + this.placeholder + '" ' + this.range.toString();
-}
-
-Fold.prototype.setFoldLine = function(foldLine) {
-    this.foldLine = foldLine;
-    this.subFolds.forEach(function(fold) {
-        fold.setFoldLine(foldLine);
-    });
-}
-
-Fold.prototype.clone = function() {
-    var range = this.range.clone();
-    var fold = new Fold(range, this.placeholder);
-    this.subFolds.forEach(function(subFold) {
-        fold.subFolds.push(subFold.clone());
-    });
-    return fold;
-}
+var Fold = require("ace/edit_session/fold").Fold;
 
 function Folding() {
     /**
@@ -11607,25 +11718,22 @@ function Folding() {
      */
     this.getFoldAt = function(row, column, side) {
         var foldLine = this.getFoldLine(row);
-        if (foldLine) {
-            var folds = foldLine.folds,
-                fold;
-
-            for (var i = 0; i < folds.length; i++) {
-                fold = folds[i];
-                if (fold.range.contains(row, column)) {
-                    if (side == 1 && fold.range.isEnd(row, column)) {
-                        continue;
-                    } else if (side == -1 && fold.range.isStart(row, column)) {
-                        continue;
-                    }
-                    return fold;
-                }
-            }
-        } else {
+        if (!foldLine)
             return null;
+            
+        var folds = foldLine.folds;
+        for (var i = 0; i < folds.length; i++) {
+            var fold = folds[i];
+            if (fold.range.contains(row, column)) {
+                if (side == 1 && fold.range.isEnd(row, column)) {
+                    continue;
+                } else if (side == -1 && fold.range.isStart(row, column)) {
+                    continue;
+                }
+                return fold;
+            }
         }
-    }
+    };
 
     /**
      * Returns all folds in the given range. Note, that this will return folds
@@ -11633,33 +11741,30 @@ function Folding() {
      */
     this.getFoldsInRange = function(range) {
         range = range.clone();
-        var start = range.start,
-            end = range.end;
-        var foldLines = this.$foldData,
-            folds,
-            fold;
-        var cmp,
-            foundFolds = [];
+        var start = range.start;
+        var end = range.end;
+        var foldLines = this.$foldData;
+        var foundFolds = [];
 
         start.column += 1;
         end.column -= 1;
 
         for (var i = 0; i < foldLines.length; i++) {
-            cmp = foldLines[i].range.compareRange(range);
-            // Range is before foldLine. No intersection. This means,
-            // there might be other foldLines that intersect.
+            var cmp = foldLines[i].range.compareRange(range);
             if (cmp == 2) {
+                // Range is before foldLine. No intersection. This means,
+                // there might be other foldLines that intersect.
                 continue;
-            } else
-            // Range is after foldLine. There can't be any other foldLines then,
-            // so let's give up.
-            if (cmp == -2) {
+            }
+            else if (cmp == -2) {
+                // Range is after foldLine. There can't be any other foldLines then,
+                // so let's give up.
                 break;
             }
 
-            folds = foldLines[i].folds;
+            var folds = foldLines[i].folds;
             for (var j = 0; j < folds.length; j++) {
-                fold = folds[j];
+                var fold = folds[j];
                 cmp = fold.range.compareRange(range);
                 if (cmp == -2) {
                     break;
@@ -11695,46 +11800,44 @@ function Folding() {
      */
     this.getFoldStringAt = function(row, column, trim, foldLine) {
         var foldLine = foldLine || this.getFoldLine(row);
-        if (!foldLine) {
+        if (!foldLine)
             return null;
-        } else {
-            var fold, lastFold, cmp, str;
-            lastFold = {
-                end: { column: 0 }
-            };
-            // TODO: Refactor to use getNextFoldTo function.
-            for (var i = 0; i < foldLine.folds.length; i++) {
-                fold = foldLine.folds[i];
-                cmp = fold.range.compareEnd(row, column);
-                if (cmp == -1) {
-                    str = this.getLine(fold.start.row).
-                                substring(lastFold.end.column, fold.start.column);
-                    break;
-                } else if (cmp == 0) {
-                    return null;
-                }
-                lastFold = fold;
+            
+        var lastFold = {
+            end: { column: 0 }
+        };
+        // TODO: Refactor to use getNextFoldTo function.
+        for (var i = 0; i < foldLine.folds.length; i++) {
+            var fold = foldLine.folds[i];
+            var cmp = fold.range.compareEnd(row, column);
+            if (cmp == -1) {
+                var str = this
+                    .getLine(fold.start.row)
+                    .substring(lastFold.end.column, fold.start.column);
+                break;
             }
-            if (!str) {
-                str = this.getLine(fold.start.row).
-                                substring(lastFold.end.column);
+            else if (cmp == 0) {
+                return null;
             }
-            if (trim == -1) {
-                return str.substring(0, column - lastFold.end.column);
-            } else if (trim == 1) {
-                return str.substring(column - lastFold.end.column)
-            } else {
-                return str;
-            }
+            lastFold = fold;
         }
+        if (!str)
+            str = this.getLine(fold.start.row).substring(lastFold.end.column);
+
+        if (trim == -1)
+            return str.substring(0, column - lastFold.end.column);
+        else if (trim == 1)
+            return str.substring(column - lastFold.end.column)
+        else
+            return str;
     }
 
     this.getFoldLine = function(docRow, startFoldLine) {
         var foldData = this.$foldData;
         var i = 0;
-        if(startFoldLine)
+        if (startFoldLine)
             i = foldData.indexOf(startFoldLine);
-        if(i == -1)
+        if (i == -1)
             i = 0;
         for (i; i < foldData.length; i++) {
             var foldLine = foldData[i];
@@ -11751,9 +11854,9 @@ function Folding() {
     this.getNextFold = function(docRow, startFoldLine) {
         var foldData = this.$foldData, ans;
         var i = 0;
-        if(startFoldLine)
+        if (startFoldLine)
             i = foldData.indexOf(startFoldLine);
-        if(i == -1)
+        if (i == -1)
             i = 0;
         for (i; i < foldData.length; i++) {
             var foldLine = foldData[i];
@@ -11770,7 +11873,7 @@ function Folding() {
             var foldLine = foldData[i],
                 end = foldLine.end.row,
                 start = foldLine.start.row;
-            if(end >= last) {
+            if (end >= last) {
                 if(start < last) {
                     if(start >= first)
                         rowCount -= last-start;
@@ -11803,76 +11906,52 @@ function Folding() {
      *      The new created Fold object or an existing fold object in case the
      *      passed in range fits an existing fold exactly.
      */
-    this.addFold = function(placeholder, startRow, startColumn, endRow, endColumn) {
-        var range;
+    this.addFold = function(placeholder, range) {
         var foldData = this.$foldData;
-        var foldRow  = null;
-        var foldLine;
-        var fold;
-        var argsFold;
-        var folds;
         var added = false;
 
-        if (placeholder instanceof Fold) {
-            argsFold = placeholder;
-            startRow = argsFold.range;
-            placeholder = argsFold.placeholder;
-        }
+        if (placeholder instanceof Fold)
+            var fold = placeholder;
+        else
+            fold = new Fold(range, placeholder);
 
-        // Normalize parameters.
-        if (!(startRow instanceof Range)) {
-            range = new Range(startRow, startColumn, endRow, endColumn);
-        } else {
-            range = startRow;
-            startRow = range.start.row;
-            startColumn = range.start.column;
-            endRow = range.end.row;
-            endColumn = range.end.column;
-        }
-
+        var startRow = fold.start.row;
+        var startColumn = fold.start.column;
+        var endRow = fold.end.row;
+        var endColumn = fold.end.column;
+        
         // --- Some checking ---
-        if (placeholder.length < 2) {
+        if (fold.placeholder.length < 2)
             throw "Placeholder has to be at least 2 characters";
-        }
 
-        if (startRow == endRow && endColumn - startColumn < 2) {
+        if (startRow == endRow && endColumn - startColumn < 2)
             throw "The range has to be at least 2 characters width";
-        }
 
-        fold = this.getFoldAt(startRow, startColumn, 1);
-        if (fold
-            && fold.range.isEnd(endRow, endColumn)
-            && fold.range.isStart(startRow, startColumn))
-        {
+        var existingFold = this.getFoldAt(startRow, startColumn, 1);
+        if (
+            existingFold
+            && existingFold.range.isEnd(endRow, endColumn)
+            && existingFold.range.isStart(startRow, startColumn)
+        ) {
             return fold;
         }
 
-        fold = this.getFoldAt(startRow, startColumn, 1);
-        if (fold && !fold.range.isStart(startRow, startColumn)) {
+        existingFold = this.getFoldAt(startRow, startColumn, 1);
+        if (existingFold && !existingFold.range.isStart(startRow, startColumn))
             throw "A fold can't start inside of an already existing fold";
-        }
 
-        fold = this.getFoldAt(endRow, endColumn, -1);
-        if (fold && !fold.range.isEnd(endRow, endColumn)) {
+        existingFold = this.getFoldAt(endRow, endColumn, -1);
+        if (existingFold && !existingFold.range.isEnd(endRow, endColumn))
             throw "A fold can't end inside of an already existing fold";
-        }
 
-        if (endRow >= this.doc.getLength()) {
+        if (endRow >= this.doc.getLength())
             throw "End of fold is outside of the document.";
-        }
 
-        if (endColumn > this.getLine(endRow).length
-            || startColumn > this.getLine(startRow).length)
-        {
+        if (endColumn > this.getLine(endRow).length || startColumn > this.getLine(startRow).length)
             throw "End of fold is outside of the document.";
-        }
-
-        // --- Start adding the fold ---
-        // Use the passed in fold or create a new one.
-        fold = argsFold || new Fold(range, placeholder);
 
         // Check if there are folds in the range we create the new fold for.
-        folds = this.getFoldsInRange(range);
+        var folds = this.getFoldsInRange(fold.range);
         if (folds.length > 0) {
             // Remove the folds from fold data.
             this.removeFolds(folds);
@@ -11881,12 +11960,13 @@ function Folding() {
         }
 
         for (var i = 0; i < foldData.length; i++) {
-            foldLine = foldData[i];
+            var foldLine = foldData[i];
             if (endRow == foldLine.start.row) {
                 foldLine.addFold(fold);
                 added = true;
                 break;
-            } else if (startRow == foldLine.end.row) {
+            }
+            else if (startRow == foldLine.end.row) {
                 foldLine.addFold(fold);
                 added = true;
                 if (!fold.sameRow) {
@@ -11899,18 +11979,17 @@ function Folding() {
                     }
                 }
                 break;
-            } else if (endRow <= foldLine.start.row) {
+            }
+            else if (endRow <= foldLine.start.row) {
                 break;
             }
         }
 
-        if (!added) {
+        if (!added)
             foldLine = this.$addFoldLine(new FoldLine(this.$foldData, fold));
-        }
 
-        if (this.$useWrapMode) {
+        if (this.$useWrapMode)
             this.$updateWrapData(foldLine.start.row, foldLine.start.row);
-        }
 
         // Notify that fold data has changed.
         this.$modified = true;
@@ -12354,6 +12433,84 @@ function FoldLine(foldData, folds) {
 }).call(FoldLine.prototype);
 
 exports.FoldLine = FoldLine;
+});/* vim:ts=4:sts=4:sw=4:
+ * ***** BEGIN LICENSE BLOCK *****
+ * Version: MPL 1.1/GPL 2.0/LGPL 2.1
+ *
+ * The contents of this file are subject to the Mozilla Public License Version
+ * 1.1 (the "License"); you may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at
+ * http://www.mozilla.org/MPL/
+ *
+ * Software distributed under the License is distributed on an "AS IS" basis,
+ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
+ * for the specific language governing rights and limitations under the
+ * License.
+ *
+ * The Original Code is Ajax.org Code Editor (ACE).
+ *
+ * The Initial Developer of the Original Code is
+ * Ajax.org B.V.
+ * Portions created by the Initial Developer are Copyright (C) 2010
+ * the Initial Developer. All Rights Reserved.
+ *
+ * Contributor(s):
+ *      Julian Viereck <julian DOT viereck AT gmail DOT com>
+ *
+ * Alternatively, the contents of this file may be used under the terms of
+ * either the GNU General Public License Version 2 or later (the "GPL"), or
+ * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
+ * in which case the provisions of the GPL or the LGPL are applicable instead
+ * of those above. If you wish to allow use of your version of this file only
+ * under the terms of either the GPL or the LGPL, and not to allow others to
+ * use your version of this file under the terms of the MPL, indicate your
+ * decision by deleting the provisions above and replace them with the notice
+ * and other provisions required by the GPL or the LGPL. If you do not delete
+ * the provisions above, a recipient may use your version of this file under
+ * the terms of any one of the MPL, the GPL or the LGPL.
+ *
+ * ***** END LICENSE BLOCK ***** */
+
+define('ace/edit_session/fold', ['require', 'exports', 'module' ], function(require, exports, module) {
+
+/**
+ * Simple fold-data struct.
+ **/
+var Fold = exports.Fold = function(range, placeholder) {
+    this.foldLine = null;
+    this.placeholder = placeholder;
+    this.range = range;
+    this.start = range.start;
+    this.end = range.end;
+
+    this.sameRow = range.start.row == range.end.row;
+    this.subFolds = [];
+};
+
+(function() {
+
+    this.toString = function() {
+        return '"' + this.placeholder + '" ' + this.range.toString();
+    };
+
+    this.setFoldLine = function(foldLine) {
+        this.foldLine = foldLine;
+        this.subFolds.forEach(function(fold) {
+            fold.setFoldLine(foldLine);
+        });
+    };
+
+    this.clone = function() {
+        var range = this.range.clone();
+        var fold = new Fold(range, this.placeholder);
+        this.subFolds.forEach(function(subFold) {
+            fold.subFolds.push(subFold.clone());
+        });
+        return fold;
+    };
+
+}).call(Fold.prototype);
+
 });/* vim:ts=4:sts=4:sw=4:
  * ***** BEGIN LICENSE BLOCK *****
  * Version: MPL 1.1/GPL 2.0/LGPL 2.1
@@ -13155,7 +13312,10 @@ var VirtualRenderer = function(container, theme) {
     this.$padding = null;
     this.setPadding = function(padding) {
         this.$padding = padding;
-        this.content.style.padding = "0 " + padding + "px";
+        this.$textLayer.setPadding(padding);
+        this.$cursorLayer.setPadding(padding);
+        this.$markerFront.setPadding(padding);
+        this.$markerBack.setPadding(padding);
         this.$loop.schedule(this.CHANGE_FULL);
         this.$updatePrintMargin();
     };
@@ -13360,7 +13520,7 @@ var VirtualRenderer = function(container, theme) {
         if (this.$textLayer.showInvisibles)
             charCount += 1;
 
-        return Math.max(this.$size.scrollerWidth - this.$padding * 2, Math.round(charCount * this.characterWidth));
+        return Math.max(this.$size.scrollerWidth, Math.round(charCount * this.characterWidth));
     };
 
     this.updateFrontMarkers = function() {
@@ -13807,6 +13967,11 @@ var Marker = function(parentEl) {
 
 (function() {
 
+    this.$padding = 0;
+
+    this.setPadding = function(padding) {
+        this.$padding = padding;
+    };
     this.setSession = function(session) {
         this.session = session;
     };
@@ -13822,7 +13987,8 @@ var Marker = function(parentEl) {
 
         this.config = config;
 
-        var html = [];        
+
+        var html = [];
         for ( var key in this.markers) {
             var marker = this.markers[key];
 
@@ -13830,21 +13996,28 @@ var Marker = function(parentEl) {
             if (range.isEmpty()) continue;
 
             range = range.toScreenRange(this.session);
-
             if (marker.renderer) {
                 var top = this.$getTop(range.start.row, config);
-                var left = Math.round(range.start.column * config.characterWidth);        
+                var left = Math.round(
+                    this.$padding + range.start.column * config.characterWidth
+                );
                 marker.renderer(html, range, left, top, config);
             }
             else if (range.isMultiLine()) {
                 if (marker.type == "text") {
                     this.drawTextMarker(html, range, marker.clazz, config);
                 } else {
-                    this.drawMultiLineMarker(html, range, marker.clazz, config);
+                    this.drawMultiLineMarker(
+                        html, range, marker.clazz, config,
+                        marker.type === "background"
+                    );
                 }
             }
             else {
-                this.drawSingleLineMarker(html, range, marker.clazz, config);
+                this.drawSingleLineMarker(
+                    html, range, marker.clazz, config,
+                    null, marker.type === "background"
+                );
             }
         }
         this.element = dom.setInnerHtml(this.element, html.join(""));
@@ -13854,20 +14027,25 @@ var Marker = function(parentEl) {
         return (row - layerConfig.firstRowScreen) * layerConfig.lineHeight;
     };
 
+    /**
+     * Draws a marker, which spans a range of text in a single line
+     */ 
     this.drawTextMarker = function(stringBuilder, range, clazz, layerConfig) {
         // selection start
         var row = range.start.row;
 
-        var lineRange = new Range(row, range.start.column,
-                                  row, this.session.getScreenLastRowColumn(row));
+        var lineRange = new Range(
+            row, range.start.column,
+            row, this.session.getScreenLastRowColumn(row)
+        );
         this.drawSingleLineMarker(stringBuilder, lineRange, clazz, layerConfig, 1);
 
         // selection end
-        var row = range.end.row;
-        var lineRange = new Range(row, 0, row, range.end.column);
+        row = range.end.row;
+        lineRange = new Range(row, 0, row, range.end.column);
         this.drawSingleLineMarker(stringBuilder, lineRange, clazz, layerConfig);
 
-        for (var row = range.start.row + 1; row < range.end.row; row++) {
+        for (row = range.start.row + 1; row < range.end.row; row++) {
             lineRange.start.row = row;
             lineRange.end.row = row;
             lineRange.end.column = this.session.getScreenLastRowColumn(row);
@@ -13875,12 +14053,18 @@ var Marker = function(parentEl) {
         }
     };
 
-    this.drawMultiLineMarker = function(stringBuilder, range, clazz, layerConfig) {
+    /**
+     * Draws a multi line marker, where lines span the full width
+     */
+     this.drawMultiLineMarker = function(stringBuilder, range, clazz, layerConfig, ignorePadding) {
         // from selection start to the end of the line
+        var padding = ignorePadding ? 0 : this.$padding;
         var height = layerConfig.lineHeight;
         var width = Math.round(layerConfig.width - (range.start.column * layerConfig.characterWidth));
         var top = this.$getTop(range.start.row, layerConfig);
-        var left = Math.round(range.start.column * layerConfig.characterWidth);
+        var left = Math.round(
+            padding + range.start.column * layerConfig.characterWidth
+        );
 
         stringBuilder.push(
             "<div class='", clazz, "' style='",
@@ -13891,35 +14075,44 @@ var Marker = function(parentEl) {
         );
 
         // from start of the last line to the selection end
-        var top = this.$getTop(range.end.row, layerConfig);
-        var width = Math.round(range.end.column * layerConfig.characterWidth);
+        top = this.$getTop(range.end.row, layerConfig);
+        width = Math.round(range.end.column * layerConfig.characterWidth);
 
         stringBuilder.push(
             "<div class='", clazz, "' style='",
             "height:", height, "px;",
+            "width:", width, "px;",
             "top:", top, "px;",
-            "width:", width, "px;'></div>"
+            "left:", padding, "px;'></div>"
         );
 
         // all the complete lines
-        var height = (range.end.row - range.start.row - 1) * layerConfig.lineHeight;
+        height = (range.end.row - range.start.row - 1) * layerConfig.lineHeight;
         if (height < 0)
             return;
-        var top = this.$getTop(range.start.row + 1, layerConfig);
+        top = this.$getTop(range.start.row + 1, layerConfig);
+        width = layerConfig.width;
 
         stringBuilder.push(
             "<div class='", clazz, "' style='",
             "height:", height, "px;",
-            "width:", layerConfig.width, "px;",
-            "top:", top, "px;'></div>"
+            "width:", width, "px;",
+            "top:", top, "px;",
+            "left:", padding, "px;'></div>"
         );
     };
 
-    this.drawSingleLineMarker = function(stringBuilder, range, clazz, layerConfig, extraLength) {
+    /**
+     * Draws a marker which covers one single full line
+     */
+    this.drawSingleLineMarker = function(stringBuilder, range, clazz, layerConfig, extraLength, ignorePadding) {
+        var padding = ignorePadding ? 0 : this.$padding;
         var height = layerConfig.lineHeight;
         var width = Math.round((range.end.column + (extraLength || 0) - range.start.column) * layerConfig.characterWidth);
         var top = this.$getTop(range.start.row, layerConfig);
-        var left = Math.round(range.start.column * layerConfig.characterWidth);
+        var left = Math.round(
+            padding + range.start.column * layerConfig.characterWidth
+        );
 
         stringBuilder.push(
             "<div class='", clazz, "' style='",
@@ -13986,6 +14179,7 @@ var EventEmitter = require("pilot/event_emitter").EventEmitter;
 var Text = function(parentEl) {
     this.element = dom.createElement("div");
     this.element.className = "ace_layer ace_text-layer";
+    this.element.style.width = "auto";
     parentEl.appendChild(this.element);
 
     this.$characterSize = this.$measureSizes() || {width: 0, height: 0};
@@ -14000,6 +14194,12 @@ var Text = function(parentEl) {
     this.EOL_CHAR = "&not;";
     this.TAB_CHAR = "&rarr;";
     this.SPACE_CHAR = "&middot;";
+    this.$padding = 0;
+
+    this.setPadding = function(padding) {
+        this.$padding = padding;
+        this.element.style.padding = "0 " + padding + "px";
+    };
 
     this.getLineHeight = function() {
         return this.$characterSize.height || 1;
@@ -14511,6 +14711,11 @@ var Cursor = function(parentEl) {
 
 (function() {
 
+    this.$padding = 0;
+    this.setPadding = function(padding) {
+        this.$padding = padding;
+    };
+
     this.setSession = function(session) {
         this.session = session;
     };
@@ -14522,7 +14727,7 @@ var Cursor = function(parentEl) {
     };
 
     this.showCursor = function() {
-        this.isVisible = true;   
+        this.isVisible = true;
         dom.removeCssClass(this.cursor, "ace_hidden");
         this.cursor.style.visibility = "visible";
         this.restartTimer();
@@ -14553,7 +14758,8 @@ var Cursor = function(parentEl) {
 
         var position = this.session.selection.getCursor();
         var pos = this.session.documentToScreenPosition(position);
-        var cursorLeft = Math.round(pos.column * this.config.characterWidth);
+        var cursorLeft = Math.round(this.$padding +
+                                    pos.column * this.config.characterWidth);
         var cursorTop = (pos.row - (onScreen ? this.config.firstRowScreen : 0)) *
             this.config.lineHeight;
 
@@ -14647,8 +14853,11 @@ var ScrollBar = function(parent) {
 
     parent.appendChild(this.element);
 
+    // in OSX lion the scrollbars appear to have no width. In this case resize
+    // the to show the scrollbar but still pretend that the scrollbar has a width
+    // of 0px
     this.width = dom.scrollbarWidth();
-    this.element.style.width = this.width + "px";
+    this.element.style.width = (this.width || 15) + "px";
 
     event.addListener(this.element, "scroll", this.onScroll.bind(this));
 };
@@ -15114,6 +15323,7 @@ define("text/ace/css/editor.css", [], ".ace_editor {" +
   "    opacity: 0;" +
   "    background: transparent;" +
   "    appearance: none;" +
+  "    -moz-appearance: none;" +
   "    border: none;" +
   "    resize: none;" +
   "    outline: none;" +
@@ -15142,7 +15352,7 @@ define("text/ace/css/editor.css", [], ".ace_editor {" +
   ".ace_cursor-layer {" +
   "    z-index: 4;" +
   "    cursor: text;" +
-  "    pointer-events: none;" +
+  "    /* setting pointer-events: none; here will break mouse wheel scrolling in Safari */" +
   "}" +
   "" +
   ".ace_cursor {" +
